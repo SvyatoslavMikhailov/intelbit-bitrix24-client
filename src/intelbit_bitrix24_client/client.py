@@ -105,6 +105,46 @@ class Bitrix24Client:
         """
         return await self._request(method, params or {})
 
+    async def call_v3(self, method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Вызов метода REST **v3**: POST JSON на `/rest/api/{uid}/{token}/{method}`.
+
+        Версия выбирается явно: v3-метод по пути v2 отвечает `ERROR_METHOD_NOT_FOUND`
+        и наоборот (так на 4-23-11 `tasks.task.chat.message.send` был ошибочно сочтён
+        отсутствующим). Квота портала общая — тот же rate limiter, что у `call`;
+        `QUERY_LIMIT` повторяется с backoff. Возвращает полный ответ (`result` и т.д.).
+
+        Raises:
+            Bitrix24Error: ошибка v3 (`.validation` — непрошедшие поля) или транспорт.
+        """
+        # v3-база вычисляется при вызове: конструктор не должен падать на неполном
+        # конфиге (коннектор без URL сообщает об этом через health, а не исключением).
+        url = f"{_v3_base(self._base_url)}{method}"
+        for attempt in range(self._max_retries + 1):
+            await self._bucket.acquire()
+            async with httpx.AsyncClient(
+                timeout=self._timeout, transport=self._transport, verify=self._verify
+            ) as client:
+                try:
+                    resp = await client.post(url, json=payload or {})
+                except httpx.HTTPError as exc:
+                    raise Bitrix24Error("transport_error", str(exc)) from exc
+
+            data = _parse_json(resp)
+            error = data.get("error")
+            if error:
+                exc_v3 = _v3_error(error, resp.status_code)
+                if _is_query_limit(exc_v3.code, resp.status_code):
+                    if attempt < self._max_retries:
+                        await _backoff(self._retry_backoff, attempt)
+                        continue
+                    raise QueryLimitExceeded(exc_v3.code, exc_v3.description, resp.status_code)
+                raise exc_v3
+            return data
+
+        raise QueryLimitExceeded(
+            "QUERY_LIMIT_EXCEEDED", f"лимит не освободился за {self._max_retries} повторов"
+        )
+
     async def call_batch(
         self,
         commands: dict[str, tuple[str, dict[str, Any]]],
@@ -195,6 +235,45 @@ class Bitrix24Client:
         raise QueryLimitExceeded(
             "QUERY_LIMIT_EXCEEDED", f"лимит не освободился за {self._max_retries} повторов"
         )
+
+
+def _v3_base(webhook_url: str) -> str:
+    """URL вебхука v2 → база v3: `/rest/{uid}/{token}/` → `/rest/api/{uid}/{token}/`."""
+    head, sep, tail = webhook_url.partition("/rest/")
+    if not sep or not tail:
+        raise ValueError("Не похоже на URL входящего вебхука Bitrix24 (нет сегмента /rest/)")
+    if tail.startswith("api/"):
+        return webhook_url
+    return f"{head}/rest/api/{tail}"
+
+
+def _v3_error(raw: Any, status_code: int | None) -> Bitrix24Error:
+    """Ошибка v3 `{"code", "message", "validation": [{"field", "message"}]}` → Bitrix24Error.
+
+    Портал изредка отвечает по v3-пути ошибкой в старой форме (строка) — её тоже
+    приводим, чтобы наружу не уходил сырой JSON.
+    """
+    if not isinstance(raw, dict):
+        return Bitrix24Error(str(raw) or "unknown_error", "", status_code)
+    code = str(raw.get("code") or "unknown_error")
+    message = str(raw.get("message") or "")
+    fields: list[dict[str, Any]] = []
+    validation = raw.get("validation")
+    if isinstance(validation, list):
+        for item in validation:
+            if isinstance(item, dict):
+                fields.append({"field": item.get("field"), "message": item.get("message")})
+    if fields:
+        detail = "; ".join(
+            f"{f['field']}: {f['message']}" if f["field"] else str(f["message"]) for f in fields
+        )
+        message = f"{message} — {detail}" if message else detail
+    return Bitrix24Error(code, message, status_code, validation=fields)
+
+
+def _is_query_limit(code: str, status_code: int | None) -> bool:
+    """Признак «лимит запросов исчерпан» для v3 (код у v3 длиннее, чем у v2)."""
+    return "QUERY_LIMIT" in code.upper() or status_code == 503
 
 
 def _parse_json(resp: httpx.Response) -> dict[str, Any]:

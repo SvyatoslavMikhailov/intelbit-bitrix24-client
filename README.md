@@ -47,6 +47,26 @@ out = await client.call_batch({
   закрывается на каждый запрос.
 - На `QUERY_LIMIT_EXCEEDED` — экспоненциальный backoff и повтор через rate-limiter.
 
+## REST v3 и экранирование
+
+Некоторые методы портала существуют только в REST v3 (например, сообщение в чат задачи):
+
+```python
+await client.call_v3(
+    "tasks.task.chat.message.send",
+    {"fields": {"taskId": 1139, "text": bbcode.escape_chat("[b]важно[/b]")}},
+)
+```
+
+v3 — путь `/rest/api/{uid}/{token}/`, тело только JSON; ошибка — `Bitrix24Error` с
+`.validation`. Интерфейс задачи показывает **чат**, а не форум: `task.comment.add` пишет в
+форум, который человек в задаче не видит.
+
+- `bbcode.escape()` — описания задач и форум (скобки → `&#91;`/`&#93;`);
+- `bbcode.escape_chat()` — чат и `im.message.add` (ZWSP в скобке тега: сущности портал
+  декодирует при записи);
+- `bbcode.convert()` — обратная операция при чтении.
+
 ## TLS
 
 - `verify: bool | str = True` — проверка сертификата портала; `False` — отключить
