@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import os
+import ssl
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -46,6 +48,22 @@ def flatten(params: Any, prefix: str = "") -> dict[str, str]:
     return out
 
 
+def _tls_verify(verify: bool | str, ca_bundle: str | None) -> bool | ssl.SSLContext:
+    """Параметр `verify` для httpx: корпоративный CA → SSLContext, иначе bool/путь.
+
+    Путь строкой httpx объявил устаревшим — CA превращается в SSLContext.
+
+    Raises:
+        ValueError: файл CA не найден.
+    """
+    cafile = ca_bundle or (verify if isinstance(verify, str) else None)
+    if cafile:
+        if not os.path.isfile(cafile):
+            raise ValueError(f"Bitrix24: файл корпоративного CA не найден: {cafile}")
+        return ssl.create_default_context(cafile=cafile)
+    return bool(verify)
+
+
 class Bitrix24Client:
     """Async-клиент REST Bitrix24 для входящего вебхука коробки.
 
@@ -61,8 +79,14 @@ class Bitrix24Client:
         timeout: float = 30.0,
         max_retries: int = 3,
         retry_backoff: float = 0.5,
+        verify: bool | str = True,
+        ca_bundle: str | None = None,
         _transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
+        """Args:
+        verify: Проверка TLS-сертификата портала (False — отключить) или путь к CA.
+        ca_bundle: Путь к корпоративному CA; непустой — важнее `verify`.
+        """
         if not webhook_base_url.endswith("/"):
             webhook_base_url += "/"
         self._base_url = webhook_base_url
@@ -72,6 +96,7 @@ class Bitrix24Client:
         self._bucket = TokenBucket(rps)
         # _transport — для contract-тестов через httpx.ASGITransport (FastAPI-мок).
         self._transport = _transport
+        self._verify = _tls_verify(verify, ca_bundle)
 
     async def call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Один REST-вызов. Возвращает разобранный конверт ``{result, total?, next?}``.
@@ -148,7 +173,7 @@ class Bitrix24Client:
         for attempt in range(self._max_retries + 1):
             await self._bucket.acquire()
             async with httpx.AsyncClient(
-                timeout=self._timeout, transport=self._transport
+                timeout=self._timeout, transport=self._transport, verify=self._verify
             ) as client:
                 try:
                     resp = await client.post(url, data=form)

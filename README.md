@@ -47,6 +47,17 @@ out = await client.call_batch({
   закрывается на каждый запрос.
 - На `QUERY_LIMIT_EXCEEDED` — экспоненциальный backoff и повтор через rate-limiter.
 
+## TLS
+
+- `verify: bool | str = True` — проверка сертификата портала; `False` — отключить
+  (только для LAN-стенда с самоподписанным сертификатом), строка — путь к CA.
+- `ca_bundle: str | None = None` — путь к корпоративному CA; непустой важнее `verify`.
+  Превращается в `ssl.create_default_context(cafile=...)`; нет файла → `ValueError`.
+
+```python
+client = Bitrix24Client(url, ca_bundle="/ca/corp-ca.pem")
+```
+
 ## Разработка
 
 ```bash

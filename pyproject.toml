@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "intelbit-bitrix24-client"
-version = "0.1.0"
+version = "0.2.0"
 description = "Apache-клиент Bitrix24 REST (incoming webhook) — общий для Интелбит MCP и Река-коннектора"
 authors = [{ name = "Святослав Михайлов", email = "vceo@intelbit.ru" }]
 readme = "README.md"
@@ -20,6 +20,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "respx",
+    "trustme",
 ]
 
 [project.urls]

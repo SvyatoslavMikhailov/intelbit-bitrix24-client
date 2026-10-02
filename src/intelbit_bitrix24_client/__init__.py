@@ -4,7 +4,7 @@ from intelbit_bitrix24_client.client import BATCH_MAX, PAGE_SIZE, Bitrix24Client
 from intelbit_bitrix24_client.errors import Bitrix24Error, QueryLimitExceeded
 from intelbit_bitrix24_client.ratelimit import TokenBucket
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "BATCH_MAX",
